@@ -17,12 +17,12 @@ pub type DataField {
 
 pub fn serialize_data_field(d: DataField) -> BitArray {
   case d {
-    TaggedFields -> <<0>>
+    TaggedFields -> <<0:size(8)>>
     Kboolean(False) -> <<0>>
     Kboolean(True) -> <<1>>
     Kint(value, size, False) -> <<value:big-size(size)>>
     Kint(value, _, True) -> zigzag_encode(value)
-    Kuuid(value) -> bb.to_bit_array(bb.from_string(value))
+    Kuuid(_value) -> <<0:size(128)>>
     // STRING 
     Kstring(value, False, False) -> {
       let value = option.unwrap(value, "")
@@ -61,7 +61,7 @@ pub fn serialize_data_field(d: DataField) -> BitArray {
             bb.from_string(value),
             zigzag_encode(string.byte_size(value)),
           ))
-        None -> <<0>>
+        None -> <<>>
       }
     }
   }
@@ -83,7 +83,6 @@ fn append_data(acc: bb.BytesBuilder, d: DataField) -> bb.BytesBuilder {
 }
 
 pub fn zigzag_decode(val: BitArray) -> #(Int, BitArray) {
-  io.debug(bit_array.inspect(val))
   let #(bits, rest) = zigzag_decode_helper(<<>>, val)
   // for each byte in the input, there was 1 extra continuation bit. 
   let num_bits = bit_array.byte_size(bits) * 8 - bit_array.byte_size(bits)

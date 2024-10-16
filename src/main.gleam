@@ -7,7 +7,7 @@ import gleam/option.{None, Some}
 import gleam/otp/actor
 import gleam/result
 import glisten
-import impl/datafield.{type DataField, Kboolean, Kint, Kstring}
+import impl/datafield.{type DataField, Kboolean, Kint, Kstring, Kuuid}
 
 pub type ApiError {
   UnknownServerError
@@ -31,7 +31,6 @@ fn api_error_code(code: ApiError) -> Int {
     UnsupportedVersion -> 35
     InvalidRequest -> 42
     UnsupportedEndpointType -> 115
-    _ -> -1
   }
 }
 
@@ -44,7 +43,7 @@ pub type ApiKey {
 fn to_api_key(i: Int) -> ApiKey {
   case i {
     18 -> ApiVersions
-    35 -> DescribeTopicPartitions
+    75 -> DescribeTopicPartitions
     _ -> UnknownApiKey
   }
 }
@@ -71,14 +70,6 @@ pub fn decode_header(d: BitArray) -> Result(Request, ApiError) {
       api_key:size(16),
       api_version:size(16),
       correlation_id:size(32),
-      body:bits,
-    >> ->
-      Ok(Request(HeaderV1(req_len, api_key, api_version, correlation_id), body))
-    <<
-      req_len:size(32),
-      api_key:size(16),
-      api_version:size(16),
-      correlation_id:size(32),
       -1:size(16),
       body:bits,
     >> ->
@@ -92,17 +83,28 @@ pub fn decode_header(d: BitArray) -> Result(Request, ApiError) {
       api_version:size(16),
       correlation_id:size(32),
       client_id_length:size(16),
-      client_id:size(client_id_length),
-      body:bits,
-    >> ->
-      case bit_array.to_string(<<client_id>>) {
+      // tag buffer? 
+      rest:bits,
+    >> -> {
+      let size = client_id_length * 8
+      let assert <<client_id_bits:size(size), rest:bits>> = rest
+      case bit_array.to_string(<<client_id_bits:size(size)>>) {
         Ok(client_id) ->
           Ok(Request(
             HeaderV2(req_len, api_key, api_version, correlation_id, client_id),
-            body,
+            rest,
           ))
         Error(_) -> Error(CorruptMessage)
       }
+    }
+    <<
+      req_len:size(32),
+      api_key:size(16),
+      api_version:size(16),
+      correlation_id:size(32),
+      body:bits,
+    >> ->
+      Ok(Request(HeaderV1(req_len, api_key, api_version, correlation_id), body))
     _ -> Error(CorruptMessage)
   }
 }
@@ -160,9 +162,8 @@ fn describe_topic_partitions(
     0 -> NoError
     _ -> UnsupportedVersion
   }
-
-  let assert <<array_len:size(32), rest:bits>> = req.body
-
+  io.debug(req)
+  let assert <<array_len:size(16), rest:bits>> = req.body
   let #(topic_names, _rest) = decode_strings([], array_len, rest)
 
   // the rest of the request when we need it. 
@@ -174,11 +175,11 @@ fn describe_topic_partitions(
 
   let r =
     DescribeTopicParitionResponse(
-      throttle_time: datafield.Kint(0, 32, False),
+      throttle_time: datafield.Kint(100, 32, False),
       topics: topics,
-      topic_authorized_operations: datafield.Kint(0, 32, False),
+      topic_authorized_operations: datafield.Kint(3576, 32, False),
       topic_name: datafield.Kstring(
-        value: Some(""),
+        value: Some("topic name"),
         compact: True,
         nullable: False,
       ),
@@ -187,14 +188,17 @@ fn describe_topic_partitions(
     )
   let topics =
     list.fold(topics, [], fn(acc: List(DataField), t: Topic) -> List(DataField) {
+      io.debug(t.name)
       list.append(acc, [
         datafield.Kint(api_error_code(UnknownTopicOrPartition), 16, False),
         t.name,
         t.topic_id,
         t.is_internal,
-        datafield.Kint(value: 0, size: 32, zigzag: False),
+        datafield.Kint(value: 1, size: 32, zigzag: False),
       ])
     })
+
+  io.debug(r)
 
   Response(
     bb.append_builder(
@@ -205,6 +209,7 @@ fn describe_topic_partitions(
         datafield.serialize_data_field(r.topic_authorized_operations),
         datafield.serialize_data_field(r.topic_name),
         datafield.serialize_data_field(r.partition_index),
+        datafield.serialize_data_field(datafield.TaggedFields),
       ]),
     ),
     error_code,
@@ -212,12 +217,7 @@ fn describe_topic_partitions(
 }
 
 fn get_topic(topic_name: String) -> Topic {
-  Topic(
-    Kstring(Some(topic_name), True, True),
-    Kstring(Some("00000000-0000-0000-0000-000000000000"), False, False),
-    Kboolean(True),
-    [],
-  )
+  Topic(Kstring(Some(topic_name), True, True), Kuuid(""), Kboolean(True), [])
 }
 
 fn decode_strings(
@@ -240,12 +240,10 @@ fn decode_strings(
 
 fn decode_compact_string(d: BitArray) -> #(Result(String, Nil), BitArray) {
   let #(len, rest) = datafield.zigzag_decode(d)
-  let slice = bit_array.slice(rest, 0, len)
+  let len = len * 8
 
-  #(
-    result.try(slice, bit_array.to_string),
-    result.unwrap(bit_array.slice(rest, len, -1), <<>>),
-  )
+  let assert <<slice:size(len), 0:size(8), rest:bits>> = rest
+  #(bit_array.to_string(<<slice:size(len)>>), rest)
 }
 
 fn api_versions(req: Request, response: bb.BytesBuilder) -> Response {
@@ -284,6 +282,7 @@ type ApiKeySupport {
 }
 
 fn unknown_api_key_handler(_r: Request, response: bb.BytesBuilder) -> Response {
+  io.debug("unkown api key")
   Response(
     bb.append(response, <<api_error_code(UnsupportedEndpointType):big-size(32)>>),
     UnsupportedEndpointType,
@@ -313,6 +312,8 @@ pub fn main() {
 
       let body = bb.from_bit_array(<<correlation_id:big-size(32)>>)
 
+      io.debug(api_key)
+
       let response: Response = case to_api_key(api_key) {
         ApiVersions -> api_versions(req, body)
         DescribeTopicPartitions -> describe_topic_partitions(req, body)
@@ -320,6 +321,8 @@ pub fn main() {
       }
 
       let body = bb.prepend(body, <<bb.byte_size(response.body):big-size(32)>>)
+
+      io.debug(bit_array.base16_encode(bb.to_bit_array(body)))
 
       let assert Ok(_) = glisten.send(conn, body)
 

@@ -15,7 +15,7 @@ pub fn var_int_encode_test() {
 }
 
 pub fn var_int_decode_test() {
-  let assert #(result, _body) = datafield.zigzag_decode(<<38_401:size(16)>>)
+  let #(result, _body) = datafield.zigzag_decode(<<38_401:size(16)>>)
   io.debug(int.to_base2(result))
   should.equal(result, 150)
 }
