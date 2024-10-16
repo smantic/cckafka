@@ -136,7 +136,7 @@ type Topic {
   Topic(
     name: DataField,
     topic_id: DataField,
-    is_internal: DataField,
+    is_intenrnal: DataField,
     partitions: List(DataField),
   )
 }
@@ -163,7 +163,7 @@ fn describe_topic_partitions(
 
   let assert <<array_len:size(32), rest:bits>> = req.body
 
-  let #(topic_names, _rest) = decode_strings([], array_len, rest)
+  let #(topic_names, rest) = decode_strings([], array_len, rest)
 
   // the rest of the request when we need it. 
   // let assert <<_partition_limit:size(32), rest:bits>> = rest
@@ -185,31 +185,23 @@ fn describe_topic_partitions(
       partition_index: datafield.Kint(0, 32, False),
       tags: datafield.TaggedFields,
     )
-  let topics =
-    list.fold(topics, [], fn(acc: List(DataField), t: Topic) -> List(DataField) {
-      list.append(acc, [
-        datafield.Kint(api_error_code(UnknownTopicOrPartition), 16, False),
-        t.name,
-        t.topic_id,
-        t.is_internal,
-        datafield.Kint(value: 0, size: 32, zigzag: False),
-      ])
-    })
+    let topics = list.fold(topics, fn (acc: List(DataField), t: topic) -> List(DataField){ }
 
   Response(
-    bb.append_builder(
-      response,
-      bb.concat_bit_arrays([
-        datafield.serialize_data_field(r.throttle_time),
-        datafield.serialize_list(topics),
-        datafield.serialize_data_field(r.topic_authorized_operations),
-        datafield.serialize_data_field(r.topic_name),
-        datafield.serialize_data_field(r.partition_index),
-      ]),
-    ),
+    bb.concat_bit_arrays([
+      datafield.serialize_data_field(r.throttle_time),
+      datafield.serialize_data_field(datafield.Kint(error_code, 16, False)),
+      datafield.serialize_list(topics),
+      datafield.serialize_data_field(r.topic_authorized_operations),
+      datafield.serialize_data_field(r.topic_name),
+      datafield.serialize_data_field(r.partition_index),
+    ]),
     error_code,
   )
+
+  todo
 }
+
 
 fn get_topic(topic_name: String) -> Topic {
   Topic(
@@ -291,7 +283,6 @@ fn unknown_api_key_handler(_r: Request, response: bb.BytesBuilder) -> Response {
 }
 
 pub fn main() {
-  io.println("running...")
   let assert Ok(_) =
     glisten.handler(fn(_conn) { #(Nil, None) }, fn(msg, state, conn) {
       io.println("Received message!")

@@ -1,4 +1,4 @@
-name = "codecrafters_kafka"
+name = "cckafka"
 version = "1.0.0"
 
 # For a full reference of all the available options, you can have a look at
@@ -12,4 +12,4 @@ glisten = "~> 2.0"
 gluid = ">= 1.0.0 and < 2.0.0"
 
 [dev-dependencies]
-gleeunit = "~> 1.0"
+gleeunit = ">= 1.2.0 and < 2.0.0"
